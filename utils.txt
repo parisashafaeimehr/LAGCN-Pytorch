@@ -1,0 +1,184 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc, accuracy_score, f1_score, precision_recall_curve ,confusion_matrix
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.utils.class_weight import compute_class_weight
+from scipy.linalg import fractional_matrix_power
+import random
+from sklearn import metrics
+import copy
+
+def read_data():
+    A_np = np.loadtxt('/content/drug_dis.csv', delimiter=',')
+    Sr_np = np.loadtxt('/content/drug_sim.csv', delimiter=',')
+    Sd_np = np.loadtxt('/content/dis_sim.csv', delimiter=',')
+    return A_np, Sr_np, Sd_np
+
+def normalizeAdjacency(W):
+    # input matrix must be a symmetric matrix
+
+    assert W.shape[0] == W.shape[1]
+    d = np.sum(W, axis = 1)
+    d = 1/np.sqrt(d)
+    D = np.diag(d)
+    return D @ W @ D
+
+def normalize_similarity_matrices(A_np, Sr_np, Sd_np):
+    # Calculate diagonal matrices
+    Dr = np.diag(np.sum(Sr_np, axis=1))
+    Dd = np.diag(np.sum(Sd_np, axis=1))
+
+    # Normalize similarity matrices
+    Sr_norm = fractional_matrix_power(Dr, -0.5) @ Sr_np @ fractional_matrix_power(Dr, -0.5)
+    Sd_norm = fractional_matrix_power(Dd, -0.5) @ Sd_np @ fractional_matrix_power(Dd, -0.5)
+    return Sr_norm, Sd_norm
+
+def construct_HNet(A_np,Sr_norm,Sd_norm):
+    mat1 = np.hstack((Sr_norm, A_np))
+    mat2 = np.hstack((A_np.T, Sd_norm))
+    return np.vstack((mat1, mat2))
+
+def construct_Net(A_np):
+    drug_matrix = np.matrix(
+        np.zeros((A_np.shape[0], A_np.shape[0]), dtype=np.int8))
+    dis_matrix = np.matrix(
+        np.zeros((A_np.shape[1], A_np.shape[1]), dtype=np.int8))
+
+    mat1 = np.hstack((drug_matrix, A_np))
+    mat2 = np.hstack((A_np.T, dis_matrix))
+    adj = np.vstack((mat1, mat2))
+    return adj
+
+def xavier(input_dim, output_dim):
+    init_range = np.sqrt(6.0/(input_dim + output_dim))
+    r1 = -1 * init_range
+    r2 = init_range
+    initial = torch.FloatTensor(input_dim, output_dim).uniform_(r1, r2)
+    return initial
+
+
+def loss_function(inp,target):
+    class_weights = compute_class_weight(class_weight='balanced',classes=np.unique(inp),y=inp.numpy().flatten().tolist())
+    class_weights=torch.tensor([class_weights[0]],dtype=torch.float)
+    criterion = torch.nn.CrossEntropyLoss(weight=class_weights,reduction='mean')
+    inp = torch.flatten(inp)
+    target = torch.flatten(target)
+    inp = inp[:, None]
+    target = target[:, None]
+    loss = criterion(inp,target)
+    return loss
+
+def loss_function_2(inp,target):
+    N = inp.size()[0]
+    M = inp.size()[1]
+    inp_np = inp.numpy()
+    landa = np.count_nonzero(inp_np==0)/np.count_nonzero(inp_np)
+    s = landa * inp * torch.log(target) + (1-inp) * torch.log(1-target)
+    s = (-1/(M*N)) * torch.sum(s)
+    return s
+
+def split_train_test(drug_dis_matrix,ratio=0.7):
+    index_matrix = np.asarray(np.where(drug_dis_matrix == 1))
+    # print(index_matrix)
+    association_nam = index_matrix.shape[1]
+    random_index = index_matrix.T.tolist()
+    random.shuffle(random_index)
+    ind = int(association_nam * ratio)
+    train = tuple(np.array(random_index[:ind]).T)
+    test = tuple(np.array(random_index[ind:]).T)
+    return train,test # these are index we can use drug_dis_matrix[test]
+
+import numpy as np
+from sklearn.metrics import roc_curve, auc, accuracy_score, f1_score, precision_recall_curve
+
+def evaluate(y, pred):
+  """
+  Evaluates the performance of a classification model using various metrics.
+
+  Args:
+      y (np.ndarray): True labels.
+      pred (np.ndarray): Predicted labels.
+
+  Returns:
+      tuple: A tuple containing the following metrics:
+          aupr (float): Area Under the Precision-Recall Curve (AUPRC).
+          auc (float): Area Under the ROC Curve (AUC).
+          accuracy (float): Accuracy score.
+          f1 (float): F1 score.
+          precision (np.ndarray): Precision values for each threshold.
+          recall (np.ndarray): Recall values for each threshold.
+          specificity (np.ndarray): Specificity values for each threshold.
+          sensitivity (np.ndarray): Sensitivity (recall) values for each threshold.
+          mcc (np.ndarray): Matthews Correlation Coefficient (MCC) values for each threshold.
+  """
+
+  # ROC curve and AUC
+  fpr, tpr, thresholds = roc_curve(y, pred, pos_label=1)
+  auc = metrics.auc(fpr, tpr)
+
+  # Optimal threshold selection (maximize TPR - FPR)
+  optimal_idx = np.argmax(tpr - fpr)
+  optimal_threshold = thresholds[optimal_idx]
+  # Apply threshold for classification
+  new_pred = pred.copy()
+  new_pred[new_pred <= optimal_threshold] = 0
+  new_pred[new_pred > optimal_threshold] = 1
+
+  # Calculate additional metrics
+  accuracy = accuracy_score(y, new_pred)
+  f1 = f1_score(y, new_pred)
+
+  # Precision-Recall curve and AUPRC
+  precision, recall, thresholds = precision_recall_curve(y, pred)
+  aupr = metrics.auc(recall, precision)
+
+  # Sensitivity (recall)
+  sensitivity = recall
+
+  # Specificity
+  specificity = 1 - fpr
+  average_recall = np.mean(recall)
+  average_Specificity = np.mean(specificity)
+  average_precision = np.mean(precision)
+
+  # Confusion Matrix (assuming binary classification)
+  tn, fp, fn, tp = confusion_matrix(y, new_pred).ravel()
+  plt.figure(figsize=(3, 4))
+  plt.imshow(confusion_matrix(y, new_pred), cmap='Blues')
+  plt.colorbar()
+  plt.xticks([0, 1], ['Negative', 'Positive'])
+  plt.yticks([0, 1], ['Negative', 'Positive'])
+  plt.xlabel('Predicted Label')
+  plt.ylabel('True Label')
+  plt.title('Confusion Matrix')
+  plt.text(0, 0, tn, va='center', ha='center', fontsize=12, color='black')
+  plt.text(1, 0, fp, va='center', ha='center', fontsize=12, color='black')
+  plt.text(0, 1, fn, va='center', ha='center', fontsize=12, color='black')
+  plt.text(1, 1, tp, va='center', ha='center', fontsize=12, color='black')
+  plt.grid(False)
+  plt.show()
+
+  # ROC Curve
+  plt.figure(figsize=(3, 4))
+  plt.plot(fpr, tpr, label='ROC curve (AUC = %0.4f)' % auc)
+  plt.plot([0, 1], [0, 1], 'k--', label='No Skill')
+  plt.xlim([0.0, 1.0])
+  plt.ylim([0.0, 1.05])
+  plt.xlabel('False Positive Rate')
+  plt.ylabel('True Positive Rate')
+  plt.title('ROC Curve')
+  plt.legend(loc="lower right")
+  plt.show()
+
+  # Precision-Recall Curve
+  plt.figure(figsize=(3, 4))
+  plt.plot(recall, precision, label='Precision-Recall Curve (AUPRC = %0.4f)' % aupr)
+  plt.xlabel('Recall')
+  plt.ylabel('Precision')
+  plt.title('Precision-Recall Curve')
+  plt.legend(loc="lower left")
+  plt.show()
+
+  return aupr, auc, accuracy, f1, precision, recall, specificity, sensitivity, optimal_threshold,average_recall,average_Specificity,average_precision

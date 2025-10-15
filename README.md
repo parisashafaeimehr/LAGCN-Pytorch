@@ -1,7 +1,7 @@
 # LAGCN-PyTorch
 
 This repository contains a **PyTorch implementation** of the LAGCN model, enhanced and extended with additional features and modules.  
-The original code is available [here](https://github.com/storyandwine/LAGCN/) and the corresponding paper can be found [here](https://academic.oup.com/bib/article/22/4/bbaa243/5918381?login=false).
+The original code is available [LAGCN](https://github.com/storyandwine/LAGCN/) and the corresponding paper can be found [PAPER](https://academic.oup.com/bib/article/22/4/bbaa243/5918381?login=false).
 
 ---
 
